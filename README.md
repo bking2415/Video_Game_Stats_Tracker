@@ -10,7 +10,7 @@ This app uses:
 ---
 
 ## 🚀 Live Application
-👉 _[Add your deployed Streamlit app link here]_
+👉 [Video Game Stats Entry](https://video-game-stats-tracker.streamlit.app/)
 
 ---
 
@@ -94,7 +94,7 @@ TRUSTED_EMAILS=user1@gmail.com,user2@gmail.com
 
 Run the Flask app:
 ```bash
-python flask_backend_api.py
+python flask_app.py
 ```
 > Flask starts and creates tables automatically.
 
