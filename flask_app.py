@@ -3,7 +3,6 @@ import psycopg2
 from psycopg2.pool import SimpleConnectionPool
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta, timezone
-import streamlit as st
 import jwt
 
 
