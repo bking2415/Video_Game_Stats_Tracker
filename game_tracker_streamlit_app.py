@@ -22,7 +22,7 @@ if not TRUSTED_EMAILS:
     st.warning("TRUSTED_EMAILS list is not set or empty in Streamlit secrets. No users will be treated as admin.")
      
 # --- Page Config ---
-st.set_page_config(layout="wide", page_title="Video Games Stat Tracker", page_icon="🏠")
+st.set_page_config(layout="wide", page_title="Video Games Stat Tracker", page_icon="🎮")
 
 # --- Session State Initialization ---
 if 'num_stats' not in st.session_state:
