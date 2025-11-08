@@ -156,10 +156,6 @@ streamlit run streamlit_app.py
 
 ## 🧩 Entity Relationship Diagram (ERD)
 
-### Visual ER Diagram
-
-![Video Game Stats ER Diagram](VideoGameStats_ERD.png)
-
 ### Mermaid Diagram (GitHub Rendered)
 
 ```mermaid
