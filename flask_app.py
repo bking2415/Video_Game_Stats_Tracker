@@ -5,28 +5,17 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta, timezone
 import jwt
 
-
 app = Flask(__name__)
 
 # --- Environment Variable Check ---
-# DB_URL = os.environ.get("DB_URL")
-# DB_NAME = os.environ.get("DB_NAME")
-# DB_USER = os.environ.get("DB_USER")
-# DB_PASSWORD = os.environ.get("DB_PASSWORD")
-# API_KEY = os.environ.get("API_KEY") # Still needed for login and add_trusted_user
-# JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
-# TRUSTED_EMAILS_STR = os.environ.get("TRUSTED_EMAILS", "")
-# TRUSTED_EMAILS_LIST = [email.strip() for email in TRUSTED_EMAILS_STR.split(',') if email.strip()]
-
-# --- Environment Variable Check ---
-DB_URL = "bol.671703419022.us-west-1.redshift-serverless.amazonaws.com"
-DB_NAME = "game_stats_tracker"""
-DB_USER = "admin"
-DB_PASSWORD = "King1993"
-API_KEY = "your_secret_api_key_here"
-JWT_SECRET_KEY = "sume_random_secret_key"
-TRUSTED_EMAILS_LIST = ["bking2415@gmail.com"]
-
+DB_URL = os.environ.get("DB_URL")
+DB_NAME = os.environ.get("DB_NAME")
+DB_USER = os.environ.get("DB_USER")
+DB_PASSWORD = os.environ.get("DB_PASSWORD")
+API_KEY = os.environ.get("API_KEY") # Still needed for login and add_trusted_user
+JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
+TRUSTED_EMAILS_STR = os.environ.get("TRUSTED_EMAILS", "")
+TRUSTED_EMAILS_LIST = [email.strip() for email in TRUSTED_EMAILS_STR.split(',') if email.strip()]
 
 if not all([DB_URL, DB_NAME, DB_USER, DB_PASSWORD, API_KEY, JWT_SECRET_KEY]):
     print("WARNING: One or more environment variables are not set. Using default values.")
@@ -51,27 +40,6 @@ try:
 except (Exception, psycopg2.Error) as error:
     print(f"FATAL ERROR: Failed to initialize database connection pool: {error}")
     db_pool = None # Set to None to indicate failure
-    
-# def get_db_connection(database_url=DB_URL, db_name=DB_NAME, db_user=DB_USER, db_password=DB_PASSWORD):
-#     """Establishes a connection to the PostgreSQL database."""
-#     print("Connecting to database...")
-#     # Basic validation
-#     if not all([database_url, db_name, db_user, db_password]):
-#         print("Error: Database connection details are missing.")
-#         return None
-#     try:
-#         conn = psycopg2.connect(
-#             host=database_url,
-#             database=db_name,
-#             user=db_user,
-#             password=db_password,
-#             port=5439
-#         )
-#         print("Successfully connected to the database.")
-#         return conn
-#     except (Exception, psycopg2.Error) as error:
-#         print(f"Error connecting to the database: {error}")
-#         return None
 
 def get_db_connection():
     """Gets a connection from the pool."""

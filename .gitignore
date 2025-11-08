@@ -15410,3 +15410,4 @@ __pycache__/config.cpython-312.pyc
 .venv/Lib/site-packages/gunicorn-23.0.0.dist-info/WHEEL
 .venv/Scripts/gunicorn.exe
 test_variables_backend.txt
+__pycache__/utils.cpython-312.pyc
