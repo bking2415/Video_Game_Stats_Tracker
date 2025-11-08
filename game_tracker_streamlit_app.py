@@ -67,6 +67,8 @@ if 'selected_subgenre' not in st.session_state:
     st.session_state.selected_subgenre = "Select a Subgenre"
 if 'is_trusted_user' not in st.session_state:
     st.session_state.is_trusted_user = False
+if 'is_registered_guest' not in st.session_state:
+    st.session_state.is_registered_guest = False
 if 'email' not in st.session_state:
     st.session_state.email = None
 if 'auth_mode' not in st.session_state:
@@ -120,11 +122,17 @@ if 'pre_match_rank_value' not in st.session_state:
 if 'post_match_rank_value' not in st.session_state:
     st.session_state.post_match_rank_value = "Unranked"
 
+# --- NEW: Guest-specific state ---
+if 'guest_selected_genre' not in st.session_state:
+    st.session_state.guest_selected_genre = "Select a Genre"
+if 'guest_selected_subgenre' not in st.session_state:
+    st.session_state.guest_selected_subgenre = "Select a Subgenre"
+
 # --- Authentication Logic ---
 def attempt_flask_login(user_email):
-    """Requests a JWT from the Flask backend and updates session state based on backend response."""
+    """Requests a JWT from the Flask backend and updates session state."""
     try:
-        print(f"Attempting Flask login for trusted user: {user_email}...") # Debug
+        print(f"Attempting Flask login for user: {user_email}...")
         response = requests.post(
             f"{FLASK_API_URL}/login",
             headers={"X-API-KEY": API_KEY, "Content-Type": "application/json"},
@@ -134,127 +142,117 @@ def attempt_flask_login(user_email):
         token = response.json().get('token')
         is_trusted_from_backend = response.json().get('is_trusted', False)
 
-        if token and is_trusted_from_backend: # Only store token if user is trusted
-            print(f"Flask login successful. JWT received. Backend confirmed Trusted: {is_trusted_from_backend}") # Debug
+        if token:
+            print(f"Flask login successful. JWT received. Backend confirmed Trusted: {is_trusted_from_backend}")
             st.session_state.jwt_token = token
-            st.session_state.is_trusted_user = True
+            st.session_state.is_trusted_user = is_trusted_from_backend
+            st.session_state.is_registered_guest = not is_trusted_from_backend
             st.session_state.auth_mode = 'logged_in'
             st.session_state.email = user_email
             return True
-        elif is_trusted_from_backend is False:
-            # User exists in backend but is not trusted - treat as guest
-            print(f"Flask login: User {user_email} exists but is not trusted.") # Debug
-            st.session_state.auth_mode = 'guest' # Revert to guest mode
-            st.session_state.is_trusted_user = False
-            st.session_state.jwt_token = None
-            st.session_state.email = user_email # Keep email for sidebar info
-            return False # Indicate non-admin login
-        else: # Catch case where token might be missing but trusted somehow (shouldn't happen)
-            print("Flask login failed: No token received or backend trust issue.") # Debug
-            st.error("Authentication with backend failed.")
-            st.session_state.auth_mode = 'login_failed'
-            return False
+        else:
+             print(f"Flask login okay but no token for {user_email}. Backend Trusted: {is_trusted_from_backend}")
+             st.session_state.is_trusted_user = False
+             st.session_state.is_registered_guest = True
+             st.session_state.auth_mode = 'logged_in'
+             st.session_state.email = user_email
+             st.session_state.jwt_token = None
+             return False
     except requests.exceptions.RequestException as e:
-        print(f"Flask login failed: Request Exception: {e}") # Debug
+        print(f"Flask login failed: Request Exception: {e}")
         error_detail = str(e)
         if 'response' in locals() and response is not None:
-             try: error_detail = response.json().get("error", response.text)
+             try: error_detail = response.json().get("message", response.json().get("error", response.text))
              except ValueError: error_detail = response.text
         st.error(f"Failed to authenticate with backend: {error_detail}")
         st.session_state.auth_mode = 'login_failed'
         return False
 
 def register_guest_user(user_email):
-    """Registers a non-trusted user in the backend. Returns True on success, False on failure."""
-    try:
-        print(f"Registering guest user {user_email} in backend...") # Debug
-        reg_response = requests.post(
-            f"{FLASK_API_URL}/add_user",
-            headers={"X-API-KEY": API_KEY, "Content-Type": "application/json"},
-            json={"email": user_email}
-        )
-        reg_response.raise_for_status()
-        print(f"Guest registration check completed (Status: {reg_response.status_code})") # Debug
-        # Keep frontend state as guest even after registration
+    """Registers a non-trusted user in the backend."""
+    if not st.session_state.get('is_registered_guest', False):
+        try:
+            print(f"Registering guest user {user_email} in backend...")
+            reg_response = requests.post(
+                f"{FLASK_API_URL}/add_user",
+                headers={"X-API-KEY": API_KEY, "Content-Type": "application/json"},
+                json={"email": user_email}
+            )
+            reg_response.raise_for_status()
+            print(f"Guest registration check completed (Status: {reg_response.status_code})")
+            st.session_state.is_registered_guest = True
+            st.session_state.is_trusted_user = False
+            st.session_state.auth_mode = 'logged_in'
+            st.session_state.email = user_email
+            st.session_state.jwt_token = None
+            return True
+        except requests.exceptions.RequestException as e:
+             print(f"Warning: Failed to ensure guest user registration: {e}")
+             st.warning(f"Could not register your email with the backend: {e}")
+             st.session_state.auth_mode = 'login_failed'
+             return False
+    else:
         st.session_state.is_trusted_user = False
-        st.session_state.auth_mode = 'guest' # Stay in guest mode UI
-        st.session_state.email = user_email # Keep email for sidebar info if needed
+        st.session_state.auth_mode = 'logged_in'
+        st.session_state.email = user_email
         st.session_state.jwt_token = None
         return True
-    except requests.exceptions.RequestException as e:
-         print(f"Warning: Failed to ensure guest user registration: {e}")
-         st.warning(f"Could not register guest user with backend: {e}")
-         st.session_state.auth_mode = 'login_failed' # Treat registration failure as login failure
-         return False
 
 # --- State Management at the Start of Each Rerun ---
-
-# 1. Check if already logged in via Streamlit Cloud's st.user
 current_user_email = getattr(st.user, "email", None)
 
-# 2. Handle the state after Google Login promptdeleting individual stat entries (e.g., a single matdeleting individual stat entries (e.g., a single match).d
 if st.session_state.auth_mode == 'guest' and current_user_email:
-    # Auto-detected user logged into Streamlit Cloud, process them
-    print(f"Detected Streamlit Cloud user {current_user_email} while in guest mode.") # Debug
+    print(f"Detected Streamlit Cloud user {current_user_email} while in guest mode. Processing...")
     if current_user_email in TRUSTED_EMAILS:
-        print("User is in trusted list, attempting Flask login...") # Debug
-        # attempt_flask_login updates state internally
         attempt_flask_login(current_user_email)
     else:
-        print("User is NOT in trusted list, registering as guest...") # Debug
-        # register_guest_user keeps state as guest
         register_guest_user(current_user_email)
-    # Rerun needed to apply the state changes from attempt_flask_login or register_guest_user
     st.rerun()
 
 elif st.session_state.auth_mode == 'prompt_login':
-    # This state means the 'Login with Google' button was clicked
-    # Now call st.login() to show the Google Auth UI
     st.login("google")
-    # Streamlit handles the redirect. The logic above will catch the user
-    # when they return and st.user is populated.
-    st.sidebar.warning("Waiting for Google login completion...")
+    current_user_email_after_prompt = getattr(st.user, "email", None)
+    if current_user_email_after_prompt:
+        print(f"User {current_user_email_after_prompt} detected after st.login prompt.")
+        st.session_state.email = current_user_email_after_prompt
+        if current_user_email_after_prompt in TRUSTED_EMAILS:
+            attempt_flask_login(current_user_email_after_prompt)
+        else:
+            register_guest_user(current_user_email_after_prompt)
+        st.rerun()
+    # else: User is still in Google flow or cancelled
 
 # --- Sidebar Auth UI ---
 st.sidebar.title("Authentication")
 
-# Ddeleting individual stat entries (e.g., adeleting individual stat entries (e.g., a single match).
-if st.session_state.auth_mode == 'guest' or st.session_state.auth_mode == 'login_failed':
+if st.session_state.auth_mode in ('guest', 'login_failed'):
     st.sidebar.info("You are currently in Guest Mode.")
-    if st.session_state.auth_mode == 'login_failed':
-        st.sidebar.error("Previous login/registration attempt failed.")
-
+    if st.session_state.auth_mode == 'login_failed': st.sidebar.error("Previous login/registration failed.")
     col_login, col_guest = st.sidebar.columns(2)
-    with col_login:
-        if st.button("Login with Google"):
-            st.session_state.auth_mode = 'prompt_login'
-            st.rerun()
-    with col_guest:
-        st.button("Continue as Guest", disabled=(st.session_state.auth_mode == 'guest'))
+    if col_login.button("Login with Google"):
+        st.session_state.auth_mode = 'prompt_login'
+        st.rerun()
+    col_guest.button("Continue as Guest", disabled=(st.session_state.auth_mode == 'guest'))
+
+elif st.session_state.auth_mode == 'prompt_login':
+     st.sidebar.warning("Waiting for Google login completion...")
 
 elif st.session_state.auth_mode == 'logged_in':
-    # This mode now implies either trusted deleting individual stat entries (e.g., a single match).deleting individual stat entries (e.g., a single match).deleting individual stat entries (e.g., a single match).user or registered guest (but UI treats registered guest like anonymous guest)
     if st.session_state.is_trusted_user:
         st.sidebar.success(f"Logged in as Admin: {st.session_state.email}")
-    else:
-        # Show generic guest message even if registered, as UI is the same
-        st.sidebar.info(f"Logged in as Guest: {st.session_state.email}")
+        if not st.session_state.jwt_token and st.session_state.email:
+             print("JWT token missing for logged-in trusted user, attempting recovery...")
+             if not attempt_flask_login(st.session_state.email): st.error("Backend re-auth failed."); st.session_state.auth_mode = 'guest'; st.rerun()
+             else: st.rerun()
+    elif st.session_state.is_registered_guest:
+        st.sidebar.info(f"Logged in as Registered Guest: {st.session_state.email}")
+    else: st.sidebar.error("Invalid auth state. Reverting to guest."); st.session_state.auth_mode = 'guest'; st.rerun()
 
     if st.sidebar.button("Logout"):
-        # Reset all relevant session state variables
-        st.session_state.email = None
-        st.session_state.is_trusted_user = False
-        # st.session_state.is_registered_guest = False # No longer needed
-        st.session_state.jwt_token = None
+        st.session_state.clear()
         st.session_state.auth_mode = 'guest'
-        st.session_state.player_name = None # Reset player selection
-        st.session_state.data_cache = {} # Clear cache
-        st.session_state.edit_confirmed = False
-        st.session_state.delete_confirmed = False
-        st.session_state.edit_data_loaded = False
-        st.session_state.delete_data_loaded = False
-        print("Logout successful, resetting state.") # Debug
-        st.rerun()
+        print("Logout successful, resetting state.")
+        st.logout()
 
 # --- Helper Functions ---
 
@@ -423,6 +421,13 @@ def update_genre_state():
     st.session_state.selected_genre = st.session_state.new_game_genre_select # Use the new unique key
     subgenre_options = GENRES.get(st.session_state.selected_genre, ["Select a Subgenre"])
     st.session_state.selected_subgenre = subgenre_options[0]
+
+
+# --- Guest-specific callback ---
+def update_guest_genre_state_callback():
+    st.session_state.guest_selected_genre = st.session_state.guest_new_game_genre_select
+    sub_opts = GENRES.get(st.session_state.guest_selected_genre, ["Select a Subgenre"])
+    st.session_state.guest_selected_subgenre = sub_opts[0]
    
 def clear_edit_cache():
     st.session_state.data_cache.pop(f"players_{st.session_state.email}", None)
@@ -509,8 +514,26 @@ elif st.session_state.auth_mode == 'guest' or (st.session_state.auth_mode == 'lo
     st.markdown("---")
     st.subheader("New Game Details (Guest Mode)")
     st.text_input("New Game Name *", help="The name of the new game", key="guest_new_game")
-    st.selectbox("Game Genre *", list(GENRES.keys()), key="guest_genre_select")
-    st.selectbox("Game Subgenre *", ["Select a Subgenre"], key="guest_subgenre_select")
+    
+    # --- NEW: Guest Genre/Subgenre Logic ---
+    guest_game_genre_selected = st.selectbox(
+         "Game Genre *",
+         list(GENRES.keys()),
+         key="guest_new_game_genre_select", # Unique key
+         index=list(GENRES.keys()).index(st.session_state.guest_selected_genre),
+         on_change=update_guest_genre_state_callback # Use guest callback
+    )
+     
+    guest_subgenre_options = GENRES.get(st.session_state.guest_selected_genre, ["Select a Subgenre"])
+    guest_current_subgenre = st.session_state.guest_selected_subgenre
+    if guest_current_subgenre not in guest_subgenre_options: guest_current_subgenre = guest_subgenre_options[0]
+     
+    guest_game_subgenre_selected = st.selectbox(
+         "Game Subgenre *",
+         guest_subgenre_options,
+         key="guest_new_game_subgenre_select", # Unique key
+         index=guest_subgenre_options.index(guest_current_subgenre) 
+    )
     st.text_input("Game Series (Optional)", help="The series of the game", key="guest_game_series")
     st.markdown("---")
     
@@ -535,7 +558,7 @@ elif st.session_state.auth_mode == 'guest' or (st.session_state.auth_mode == 'lo
                 st.text_input(f"Stat Type {i+1}", key=f"stat_type_guest_{i}")
             with col2:
                 st.number_input(f"Stat Value {i+1}", min_value=0, step=1, key=f"stat_value_guest_{i}")
-        st.form_submit_button("Submit Form (Guest Mode)", help="This will not save data.")
+        st.form_submit_button("Submit Form (Guest Mode)", disabled=True, help="This will not save data.")
 
 
 elif st.session_state.auth_mode == 'prompt_login':
