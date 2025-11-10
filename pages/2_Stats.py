@@ -10,18 +10,29 @@ from utils import (
     FLASK_API_URL, get_recent_stats_for_display, clear_edit_cache, clear_delete_cache
 )
 
+# --- Page Guard ---
+# Redirect to home if not logged in
+if st.session_state.auth_mode != 'logged_in':
+    st.warning("Please log in from the Home page to access this feature.")
+    st.stop()
+
+# --- Player Selection (Trusted Users Only) ---
 # --- Player Selection (Trusted Users Only) ---
 if st.session_state.is_trusted_user:
     st.subheader("Select or add a player associated with your account.", divider="grey")
-
-    players_list_data = get_all_players() # Safe to call now
+    players_list_data = get_all_players()
     player_name_to_id = {p["player_name"]: p["player_id"] for p in players_list_data}
-    player_options = ["- Select player -", "Add a new player"] + list(player_name_to_id.keys())
     
-    if st.session_state.player_name not in player_name_to_id:
-        st.session_state.player_name = None
-        st.session_state.player_id = None
-
+    # Create the base list of player names from the DB
+    player_names_from_db = list(player_name_to_id.keys())
+    
+    # Check if a player is already in session state (e.g., from a "new player" submit)
+    # If they are, and they're NOT in the DB list yet, add them temporarily to the options
+    temp_player_list = player_names_from_db
+    if st.session_state.player_name and st.session_state.player_name not in player_names_from_db:
+        temp_player_list = [st.session_state.player_name] + temp_player_list
+    
+    player_options = ["- Select player -", "Add a new player"] + temp_player_list
 
     with st.form(key='player_selection_form'):
         current_player_index = (
