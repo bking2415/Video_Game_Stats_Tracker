@@ -1,4 +1,5 @@
 import streamlit as st
+from utils import YOUR_PRIVACY_POLICY_URL, YOUR_TERMS_OF_SERVICE_URL
 
 # --- GOOGLE SITE VERIFICATION ---
 st.markdown(
@@ -26,3 +27,6 @@ st.write(
 # Footer
 st.markdown("---")
 st.markdown("Made with💡by [BOL](https://youtube.com/@TheBOLGuide)")
+st.markdown(f"""
+[Privacy Policy]({YOUR_PRIVACY_POLICY_URL}) | [Terms of Service]({YOUR_TERMS_OF_SERVICE_URL})
+""")

@@ -8,14 +8,23 @@ import jwt
 app = Flask(__name__)
 
 # --- Environment Variable Check ---
-DB_URL = os.environ.get("DB_URL")
-DB_NAME = os.environ.get("DB_NAME")
-DB_USER = os.environ.get("DB_USER")
-DB_PASSWORD = os.environ.get("DB_PASSWORD")
-API_KEY = os.environ.get("API_KEY") # Still needed for login and add_trusted_user
-JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
-TRUSTED_EMAILS_STR = os.environ.get("TRUSTED_EMAILS", "")
-TRUSTED_EMAILS_LIST = [email.strip() for email in TRUSTED_EMAILS_STR.split(',') if email.strip()]
+# DB_URL = os.environ.get("DB_URL")
+# DB_NAME = os.environ.get("DB_NAME")
+# DB_USER = os.environ.get("DB_USER")
+# DB_PASSWORD = os.environ.get("DB_PASSWORD")
+# API_KEY = os.environ.get("API_KEY") # Still needed for login and add_trusted_user
+# JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
+# TRUSTED_EMAILS_STR = os.environ.get("TRUSTED_EMAILS", "")
+# TRUSTED_EMAILS_LIST = [email.strip() for email in TRUSTED_EMAILS_STR.split(',') if email.strip()]
+
+
+DB_URL = "bol.671703419022.us-west-1.redshift-serverless.amazonaws.com"
+DB_NAME = "game_stats_tracker"""
+DB_USER = "admin"
+DB_PASSWORD = "King1993"
+API_KEY = "your_secret_api_key_here"
+JWT_SECRET_KEY = "sume_random_secret_key"
+TRUSTED_EMAILS_LIST = ["bking2415@gmail.com"]
 
 if not all([DB_URL, DB_NAME, DB_USER, DB_PASSWORD, API_KEY, JWT_SECRET_KEY]):
     print("WARNING: One or more environment variables are not set. Using default values.")
@@ -87,19 +96,21 @@ def create_tables():
             
             CREATE TABLE IF NOT EXISTS dim.dim_games (
                 game_id INT IDENTITY(1, 1) PRIMARY KEY,
-                game_name VARCHAR(255) NOT NULL UNIQUE,
-                game_series VARCHAR(255),
+                game_name VARCHAR(255) NOT NULL,
+                game_installment VARCHAR(255),
                 game_genre VARCHAR(255),
                 game_subgenre VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_played_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                last_played_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(game_name, game_installment) -- Unique constraint on (Franchise, Installment)
             );
 
             CREATE TABLE IF NOT EXISTS dim.dim_players (
                 player_id INT IDENTITY(1, 1) PRIMARY KEY,
                 player_name VARCHAR(255) NOT NULL UNIQUE,
                 user_id INTEGER REFERENCES dim.dim_users(user_id) NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP 
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(player_name, user_id) 
             );
             
             CREATE TABLE IF NOT EXISTS fact.fact_game_stats (
@@ -328,7 +339,7 @@ def add_stats(user_email):
     """
     data = request.json
     game_name = data.get('game_name')
-    game_series = data.get('game_series')
+    game_installment = data.get('game_installment')
     game_genre = data.get('game_genre')
     game_subgenre = data.get('game_subgenre')
     player_name = data.get('player_name')
@@ -357,87 +368,84 @@ def add_stats(user_email):
     #     "post_match_rank_value": "Platinum"
     # }]
 
-    if not all([game_name, player_name, stats]):
-        return jsonify({"error": "Missing game_name, player_name, or stats"}), 400
+    if not all([game_name, player_name, stats]) or not isinstance(stats, list) or len(stats) == 0:
+        return jsonify({"error": "Missing or invalid fields: game_name, player_name, and stats (must be a non-empty list)"}), 400
 
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
         # Get the user_id from the authenticated email
-        cur.execute("SELECT user_id FROM dim.dim_users WHERE user_email = %s;", (user_email,))
-        user_id_row = cur.fetchone()
-        if not user_id_row:
-            return jsonify({"error": "Authenticated user not found."}), 404
-        user_id = user_id_row[0]
+        cur.execute("SELECT user_id, is_trusted FROM dim.dim_users WHERE user_email = %s;", (user_email,))
+        user_result = cur.fetchone()
+        if not user_result: return jsonify({"error": "Authenticated user not found."}), 404
+        user_id, is_trusted = user_result
+        if not is_trusted: return jsonify({"error": "User not authorized"}), 403
 
-        # --- Handle Game ---
-        cur.execute("SELECT game_id FROM dim.dim_games WHERE game_name = %s;", (game_name,))
-        game_id_row = cur.fetchone()
-        if not game_id_row:
-            cur.execute(
-                "INSERT INTO dim.dim_games (game_name, game_series, game_genre, game_subgenre) "
-                "VALUES (%s, %s, %s, %s);",
-                (game_name, game_series, game_genre, game_subgenre)
-            )
-            conn.commit()  # Commit before select to make sure insert is visible
-            cur.execute("SELECT game_id FROM dim.dim_games WHERE game_name = %s;", (game_name,))
-            game_id_row = cur.fetchone()
-            if not game_id_row:
-                raise Exception("Game insert failed.")
-            game_id = game_id_row[0]
+         # --- Game Handling ---
+        # Handle NULL game_installment properly
+        if game_installment:
+            cur.execute("SELECT game_id FROM dim.dim_games WHERE game_name = %s AND game_installment = %s;", (game_name, game_installment))
         else:
-            game_id = game_id_row[0]
-            cur.execute("UPDATE dim.dim_games SET last_played_at = CURRENT_TIMESTAMP WHERE game_id = %s;", (game_id,))
+            cur.execute("SELECT game_id FROM dim.dim_games WHERE game_name = %s AND game_installment IS NULL;", (game_name,))
+        
+        game_record = cur.fetchone()
+        game_id = None
+        if not game_record:
+            print(f"Game '{game_name}' (Series: '{game_installment}') not found, creating.")
+            cur.execute("""
+                INSERT INTO dim.dim_games (game_name, game_installment, game_genre, game_subgenre, created_at, last_played_at)
+                VALUES (%s, %s, %s, %s, GETDATE(), GETDATE());
+            """, (game_name, game_installment, game_genre, game_subgenre))
+            conn.commit()
+            if game_installment:
+                cur.execute("SELECT game_id FROM dim.dim_games WHERE game_name = %s AND game_installment = %s;", (game_name, game_installment))
+            else:
+                cur.execute("SELECT game_id FROM dim.dim_games WHERE game_name = %s AND game_installment IS NULL;", (game_name,))
+            game_id_result = cur.fetchone()
+            if not game_id_result: raise Exception("Failed to get game_id after insert.")
+            game_id = game_id_result[0]
+        else:
+            game_id = game_record[0]
+            cur.execute("UPDATE dim.dim_games SET last_played_at = GETDATE() WHERE game_id = %s;", (game_id,))
 
-        # --- Handle Player ---
+        # --- Player Handling (Redshift Safe) ---
         cur.execute("SELECT player_id FROM dim.dim_players WHERE player_name = %s AND user_id = %s;", (player_name, user_id))
-        player_id_row = cur.fetchone()
-        if not player_id_row:
-            cur.execute(
-                "INSERT INTO dim.dim_players (player_name, user_id) VALUES (%s, %s);",
-                (player_name, user_id)
-            )
+        player_record = cur.fetchone()
+        player_id = None
+        if not player_record:
+            print(f"Player '{player_name}' for user {user_id} not found, creating.")
+            cur.execute("INSERT INTO dim.dim_players (player_name, user_id, created_at) VALUES (%s, %s, GETDATE());", (player_name, user_id))
             conn.commit()
             cur.execute("SELECT player_id FROM dim.dim_players WHERE player_name = %s AND user_id = %s;", (player_name, user_id))
-            player_id_row = cur.fetchone()
-            if not player_id_row:
-                raise Exception("Player insert failed.")
-            player_id = player_id_row[0]
+            player_id_result = cur.fetchone()
+            if not player_id_result: raise Exception("Failed to get player_id after insert.")
+            player_id = player_id_result[0]
         else:
-            player_id = player_id_row[0]
+            player_id = player_record[0]
 
-        # --- Insert Stats ---
+        # --- Stat Insertion ---
+        successful_inserts = 0
         for stat_record in stats:
+            if not stat_record.get('stat_type') or stat_record.get('stat_value') is None: continue
             cur.execute("""
-                INSERT INTO fact.fact_game_stats (
-                    game_id, player_id, stat_type, stat_value,
-                    game_mode, game_level, win, ranked,
-                    pre_match_rank_value, post_match_rank_value
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+                INSERT INTO fact.fact_game_stats
+                (game_id, player_id, stat_type, stat_value, game_mode, game_level, win, ranked, pre_match_rank_value, post_match_rank_value, played_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, GETDATE());
             """, (
-                game_id,
-                player_id,
-                stat_record.get('stat_type'),
-                stat_record.get('stat_value'),
-                stat_record.get('game_mode'),
-                stat_record.get('game_level'),
-                stat_record.get('win'),
-                stat_record.get('ranked'),
-                stat_record.get('pre_match_rank_value'),
-                stat_record.get('post_match_rank_value')
+                game_id, player_id, stat_record.get('stat_type'), stat_record.get('stat_value'),
+                stat_record.get('game_mode'), stat_record.get('game_level'), stat_record.get('win'),
+                stat_record.get('ranked'), stat_record.get('pre_match_rank_value'), stat_record.get('post_match_rank_value')
             ))
-
-        conn.commit()
-        return jsonify({"message": "Stats successfully added!"}), 201
-
+            successful_inserts += 1
+        if successful_inserts > 0:
+             conn.commit()
+             return jsonify({"message": f"Stats successfully added ({successful_inserts} records)!"}), 201
+        else:
+             return jsonify({"error": "No valid stats provided to insert."}), 400
     except (Exception, psycopg2.DatabaseError) as error:
-        print(f"Error while adding stats: {error}")
-        if conn:
-            conn.rollback()
-        return jsonify({"error": f"An error occurred while adding stats: {error}"}), 500
-
+        print(f"Error: {error}"); conn.rollback()
+        return jsonify({"error": f"An internal error occurred: {str(error)}"}), 500
     finally:
         release_db_connection(conn)
 
@@ -535,12 +543,12 @@ def get_game_details(game_id, user_email):
             return jsonify({"error": "Game not found or user has no stats for it."}), 404
             
         # User has stats, so fetch game details
-        cur.execute("SELECT game_name, game_series, game_genre, game_subgenre FROM dim.dim_games WHERE game_id = %s;", (game_id,))
+        cur.execute("SELECT game_name, game_installment, game_genre, game_subgenre FROM dim.dim_games WHERE game_id = %s;", (game_id,))
         game = cur.fetchone()
         if not game:
             return jsonify({"error": "Game not found."}), 404
         
-        game_details = {"game_name": game[0], "game_series": game[1], "game_genre": game[2], "game_subgenre": game[3]}
+        game_details = {"game_name": game[0], "game_installment": game[1], "game_genre": game[2], "game_subgenre": game[3]}
         return jsonify(game_details), 200
     except (Exception, psycopg2.DatabaseError) as error:
         print(f"Error fetching game details for {game_id}: {error}")
@@ -555,7 +563,7 @@ def update_game(game_id, user_email):
     """Updates a game's details. User must be trusted and have stats for the game."""
     data = request.json
     game_name = data.get('game_name')
-    game_series = data.get('game_series')
+    game_installment = data.get('game_installment')
     game_genre = data.get('game_genre')
     game_subgenre = data.get('game_subgenre')
     
@@ -587,9 +595,9 @@ def update_game(game_id, user_email):
         # User is trusted and has stats, proceed with update
         cur.execute("""
             UPDATE dim.dim_games
-            SET game_name = %s, game_series = %s, game_genre = %s, game_subgenre = %s
+            SET game_name = %s, game_installment = %s, game_genre = %s, game_subgenre = %s
             WHERE game_id = %s;
-        """, (game_name, game_series, game_genre, game_subgenre, game_id))
+        """, (game_name, game_installment, game_genre, game_subgenre, game_id))
         conn.commit()
         
         print(f"Game {game_id} updated to '{game_name}' by {user_email}")
@@ -763,32 +771,6 @@ def get_games(user_email):
     finally:
         if conn: conn.close()
 
-@app.route('/api/get_player_games/<int:player_id>', methods=['GET'])
-@requires_jwt_auth
-def get_player_games_by_id(player_id, user_email):
-    """Gets games (id, name) for a specific player, verifying user ownership."""
-    conn = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT DISTINCT g.game_id, g.game_name
-            FROM dim.dim_games g
-            JOIN fact.fact_game_stats gs ON g.game_id = gs.game_id
-            JOIN dim.dim_players p ON gs.player_id = p.player_id
-            WHERE p.player_id = %s
-            AND p.user_id = (SELECT user_id FROM dim.dim_users WHERE user_email = %s)
-            ORDER BY g.game_name;
-        """, (player_id, user_email))
-        # Return list of dicts
-        games = [{"game_id": row[0], "game_name": row[1]} for row in cur.fetchall()]
-        return jsonify({"games": games}), 200
-    except (Exception, psycopg2.DatabaseError) as error:
-        print(f"Error while fetching player games for player {player_id}: {error}")
-        return jsonify({"error": "An error occurred while fetching games."}), 500
-    finally:
-        release_db_connection(conn)
-
 @app.route('/api/get_game_ranks/<int:game_id>', methods=['GET']) # Changed to game_id
 @requires_jwt_auth
 def get_game_ranks_by_id(game_id, user_email): # Renamed function
@@ -869,10 +851,80 @@ def get_game_stat_types(game_id, user_email):
     finally:
         release_db_connection(conn)
 
+
+@app.route('/api/get_game_franchises', methods=['GET'])
+@requires_jwt_auth
+def get_game_franchises(user_email):
+    """Gets all unique game names (franchises) the authenticated user has stats for."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT DISTINCT g.game_name
+            FROM dim.dim_games g
+            JOIN fact.fact_game_stats gs ON g.game_id = gs.game_id
+            JOIN dim.dim_players p ON gs.player_id = p.player_id
+            WHERE p.user_id = (SELECT user_id FROM dim.dim_users WHERE user_email = %s)
+            AND g.game_name IS NOT NULL
+            ORDER BY g.game_name;
+        """, (user_email,))
+        franchises = [row[0] for row in cur.fetchall()]
+        return jsonify({"game_franchises": franchises}), 200
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(f"Error: {error}")
+        return jsonify({"error": "An error occurred."}), 500
+    finally:
+        release_db_connection(conn)
+
+@app.route('/api/get_game_installments/<path:franchise_name>', methods=['GET'])
+@requires_jwt_auth
+def get_game_installments(franchise_name, user_email):
+    """Gets games (id, installment) for a specific franchise, scoped to the user."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT DISTINCT g.game_id, g.game_installment
+            FROM dim.dim_games g
+            JOIN fact.fact_game_stats gs ON g.game_id = gs.game_id
+            JOIN dim.dim_players p ON gs.player_id = p.player_id
+            WHERE p.user_id = (SELECT user_id FROM dim.dim_users WHERE user_email = %s)
+            AND g.game_name = %s
+            ORDER BY g.game_installment;
+        """, (user_email, franchise_name))
+        
+        installments = [{"game_id": row[0], "installment_name": row[1] if row[1] is not None else "(Main Game)"} for row in cur.fetchall()]
+        return jsonify({"game_installments": installments}), 200
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(f"Error: {error}")
+        return jsonify({"error": "An error occurred."}), 500
+    finally:
+        release_db_connection(conn)
+
 # Health check endpoint
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "healthy"}), 200
+
+@app.route('/db_health', methods=['GET'])
+def db_health_check():
+    conn = None
+    try:
+        conn = get_db_connection()
+        if conn:
+            cur = conn.cursor(); cur.execute("SELECT 1;"); cur.fetchone()
+            release_db_connection(conn)
+            return jsonify({"status": "healthy", "db_connection": "successful"}), 200
+        else:
+            return jsonify({"status": "unhealthy", "db_connection": "failed to get from pool"}), 503
+    except (Exception, psycopg2.DatabaseError) as e:
+        print(f"DB health check failed: {e}")
+        return jsonify({"status": "unhealthy", "db_connection": "failed query"}), 503
+    finally:
+        if conn: release_db_connection(conn)
 
 if __name__ == '__main__':
     create_tables()

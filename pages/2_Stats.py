@@ -3,11 +3,13 @@ import requests
 import pandas as pd
 from datetime import datetime
 from utils import (
-    GENRES, get_all_players, get_player_games, get_game_ranks,get_all_games,get_game_details,
+    GENRES, FLASK_API_URL, 
+    get_all_players, get_game_ranks, get_all_games, get_game_details,
     get_game_modes, get_game_stat_types, get_auth_headers, 
     add_stat_input, delete_stat_input, update_genre_state,
-    update_guest_genre_state_callback, 
-    FLASK_API_URL, get_recent_stats_for_display, clear_edit_cache, clear_delete_cache
+    update_guest_genre_state_callback, get_recent_stats_for_display, 
+    clear_edit_cache, clear_delete_cache,
+    get_game_franchises, get_game_installments
 )
 
 # --- Page Guard ---
@@ -16,7 +18,6 @@ if st.session_state.auth_mode != 'logged_in':
     st.warning("Please log in from the Home page to access this feature.")
     st.stop()
 
-# --- Player Selection (Trusted Users Only) ---
 # --- Player Selection (Trusted Users Only) ---
 if st.session_state.is_trusted_user:
     st.subheader("Select or add a player associated with your account.", divider="grey")
@@ -83,7 +84,7 @@ elif st.session_state.auth_mode == 'guest' or (st.session_state.auth_mode == 'lo
     st.subheader("New Game Details (Guest Mode)")
     st.text_input("New Game Name *", help="The name of the new game", key="guest_new_game")
     
-    # --- NEW: Guest Genre/Subgenre Logic ---
+    # --- Guest Genre/Subgenre Logic ---
     guest_game_genre_selected = st.selectbox(
          "Game Genre *",
          list(GENRES.keys()),
@@ -141,50 +142,100 @@ if st.session_state.player_name and st.session_state.is_trusted_user:
 
     # --- Enter Stats Tab ---
     with tabs[0]:
-        with st.container(border=True):
-            col_game, col_add_stat, col_del_stat = st.columns([3, 1, 1], vertical_alignment="bottom")
-            with col_game:
-                # Get games based on player_id if it exists
-                player_games = get_player_games(player_id) if player_id else [] # player_games is list of dicts
-                game_options = ["Add a New Game"] + [game['game_name'] for game in player_games] # Use list of names
-
-                # If selected_game_for_rank missing or no longer valid for the current player's games, default to "Add a New Game"
-                if ('selected_game_for_rank' not in st.session_state) or (st.session_state.selected_game_for_rank not in game_options):
-                    st.session_state.selected_game_for_rank = "Add a New Game"
-
-                # Use the validated session-state value as the selectbox's default
-                current_game_selection = st.session_state.get('selected_game_for_rank')
-                default_game_index = 0
-                if current_game_selection and current_game_selection in game_options:
-                    default_game_index = game_options.index(current_game_selection)
-                elif not current_game_selection:
-                     st.session_state.selected_game_for_rank = game_options[0]
-
-                st.selectbox(
-                     "Select or Add Game", game_options, help="Select past game or create a new game", key="game_select_key_outside",
-                     index=default_game_index,
-                     on_change=lambda: st.session_state.update(selected_game_for_rank=st.session_state.game_select_key_outside)
-                )
-            with col_add_stat: st.button("➕ Stat Row", on_click=add_stat_input, use_container_width=True)
-            with col_del_stat: st.button("➖ Stat Row", on_click=delete_stat_input, use_container_width=True)
-
-        game_name_from_state = st.session_state.selected_game_for_rank
-        is_new_game_mode = (game_name_from_state == "Add a New Game")
+         # --- NEW GAME SELECTION (Franchise -> Installment) ---
+        st.subheader("Game Selection")
         
-        selected_game_id = None
-        if not is_new_game_mode and player_id: # Only search if it's an existing game
-             for game in player_games: # Use the fetched list of dicts
-                 if game['game_name'] == game_name_from_state:
-                     selected_game_id = game['game_id']
-                     break
+        st.session_state.setdefault('selected_game_franchise', None)
+        st.session_state.setdefault('selected_game_id', None)
+
+        franchise_list = get_game_franchises()
+        franchise_options = ["- Select Franchise -"] + sorted(list(set(franchise_list))) + ["(Enter New Franchise)"]
+        
+        if st.session_state.selected_game_franchise not in franchise_options:
+             st.session_state.selected_game_franchise = "- Select Franchise -"
+        
+        selected_franchise_name = st.selectbox(
+            "Select Game Name (Franchise)", 
+            franchise_options, 
+            index=franchise_options.index(st.session_state.selected_game_franchise),
+            key="franchise_select_key",
+            on_change=lambda: st.session_state.update(selected_game_franchise=st.session_state.franchise_select_key, selected_game_id=None), # Reset game on change
+            help="Select existing game franchise or enter a new one."
+        )
+        
+        final_game_franchise = selected_franchise_name
+        new_franchise_input = ""
+        is_new_franchise_mode = (selected_franchise_name == "(Enter New Franchise)")
+        
+        # --- Logic for New Franchise ---
+        if is_new_franchise_mode:
+            new_franchise_input = st.text_input("New Game Name (Franchise) *", help="e.g., Call of Duty, Elden Ring, Final Fantasy")
+            final_game_franchise = new_franchise_input.strip() if new_franchise_input.strip() else None
+            
+            # --- NEW LOGIC: Allow skipping installment ---
+            new_installment_name_input = st.text_input("New Game Installment (Optional)", help="e.g., Black Ops 7. Leave BLANK if this is a standalone game.")
+            final_game_installment = new_installment_name_input.strip() if new_installment_name_input.strip() else None
+            
+            is_new_installment_mode = True # We are defining a new game
+            selected_game_id = None
+        
+        # --- Logic for Existing Franchise ---
+        elif final_game_franchise and final_game_franchise != "- Select Franchise -":
+            game_options_list = get_game_installments(final_game_franchise) # Returns list of dicts
+            
+            # The key from backend is 'installment_name'
+            installment_name_to_id = {g['installment_name']: g['game_id'] for g in game_options_list}
+            installment_name_options = ["- Select Installment -", "(Add New Installment)"] + list(installment_name_to_id.keys())
+            
+            current_game_id = st.session_state.get('selected_game_id')
+            current_installment_name = None
+            for name, gid in installment_name_to_id.items():
+                if gid == current_game_id:
+                    current_installment_name = name
+                    break
+            default_installment_index = installment_name_options.index(current_installment_name) if current_installment_name in installment_name_options else 0
+
+            selected_installment_name = st.selectbox(
+                "Select Game Installment", 
+                installment_name_options, 
+                key="installment_select_key",
+                index=default_installment_index,
+                on_change=lambda: st.session_state.update(selected_game_id=installment_name_to_id.get(st.session_state.installment_select_key)),
+                help="Select existing installment or add a new one."
+            )
+            st.session_state.selected_game_id = installment_name_to_id.get(selected_installment_name)
+            
+            is_new_installment_mode = (selected_installment_name == "(Add New Installment)")
+            selected_game_id = st.session_state.selected_game_id
+            
+            final_game_installment = selected_installment_name
+            new_installment_name_input = ""
+            
+            if is_new_installment_mode:
+                new_installment_name_input = st.text_input("New Game Installment *", help="e.g., Black Ops 7, Warzone.")
+                final_game_installment = new_installment_name_input.strip() if new_installment_name_input.strip() else None
+            elif selected_installment_name == "(Main Game)" or selected_installment_name == "- Select Installment -":
+                final_game_installment = None # Send NULL
+        
+        else: # No franchise selected
+            is_new_installment_mode = False
+            selected_game_id = None
+            final_game_installment = None
+        
+        # --- Add/Delete Stat Buttons ---
+        with st.container(border=True):
+            col_add_stat, col_del_stat = st.columns([1, 1])
+            with col_add_stat: st.button("➕ Stat Row", key="add_stat_button", on_click=add_stat_input, use_container_width=True)
+            with col_del_stat: st.button("➖ Stat Row", key="delete_stat_button", on_click=delete_stat_input, use_container_width=True)
+
         
         # --- Genre/Subgenre (Conditional, outside form) ---
         new_game_name_input, new_game_series_input = "", ""
         new_game_genre_selected, new_game_subgenre_selected = st.session_state.selected_genre, st.session_state.selected_subgenre
 
-        if is_new_game_mode:
-            st.markdown("---"); st.subheader("New Game Details")
-            new_game_name_input = st.text_input("New Game Name *", help="The name of the new game", key="new_game_name_input_outside")
+        if is_new_installment_mode:
+            st.markdown("---"); st.subheader("New Game Genre Details")
+            
             # Use a unique key for the genre selectbox
             new_game_genre_selected = st.selectbox( "Game Genre *", list(GENRES.keys()), help="Select the genre of the game", key="new_game_genre_select",
                 index=list(GENRES.keys()).index(st.session_state.selected_genre), on_change=update_genre_state )
@@ -194,25 +245,27 @@ if st.session_state.player_name and st.session_state.is_trusted_user:
             if current_subgenre not in subgenre_options: current_subgenre = subgenre_options[0]
             # Use a unique key for the subgenre selectbox
             new_game_subgenre_selected = st.selectbox( "Game Subgenre *", subgenre_options, help="Select the subgenre of the game", key="new_game_subgenre_select",
-                index=subgenre_options.index(current_subgenre) )
-            new_game_series_input = st.text_input("Game Series (Optional)", key="new_game_series_input_outside")
+                index=subgenre_options.index(current_subgenre) ) 
             st.markdown("---")
         
         # Determine final game details based on mode
-        if is_new_game_mode:
+        if is_new_installment_mode:
             final_game_name = new_game_name_input
             final_game_series = new_game_series_input
             final_game_genre = st.session_state.selected_genre # Read from state set by callback
             final_game_subgenre = new_game_subgenre_selected # Read from the widget
         else:
-            final_game_name = game_name_from_state
+            final_game_name = final_game_franchise
             final_game_series, final_game_genre, final_game_subgenre = None, None, None
         
         # --- Stat Type Guidance ---
-        if not is_new_game_mode and selected_game_id:
+        if not is_new_installment_mode and selected_game_id:
             stat_types_list = get_game_stat_types(selected_game_id)
             if stat_types_list:
-                st.info(f"**Tip:** For '{game_name_from_state}', you previously used these stat types: \n- " + "\n- ".join(stat_types_list))
+                if final_game_installment:
+                    st.info(f"**Tip:** For '{final_game_franchise}: {final_game_installment}', you previously used these stat types: \n- " + "\n- ".join(stat_types_list))
+                else:
+                    st.info(f"**Tip:** For '{final_game_name}', you previously used these stat types: \n- " + "\n- ".join(stat_types_list))
     
         # --- Rank Selection Section (outside the form for reactivity) ---
         st.markdown("### Rank Information") 
@@ -226,7 +279,7 @@ if st.session_state.player_name and st.session_state.is_trusted_user:
             pre_match_rank_final = "Unranked"
             post_match_rank_final = "Unranked"
             
-            if not is_new_game_mode and selected_game_id:
+            if not is_new_installment_mode and selected_game_id:
                 ranks_list = get_game_ranks(selected_game_id) # Fetch ranks by ID
                 if not ranks_list:
                     st.warning("No ranks found for this game. Please enter ranks manually.")
@@ -257,11 +310,11 @@ if st.session_state.player_name and st.session_state.is_trusted_user:
         
 
         with st.form(key='game_stats_form'):
-            st.markdown(f"**Entering stats for:** `{st.session_state.player_name}` | **Game:** `{game_name_from_state if not is_new_game_mode else '(New Game)'}`")
+            st.markdown(f"**Entering stats for:** `{st.session_state.player_name}` | **Game:** `{final_game_franchise}` | **Installment:** `{final_game_installment or 'Main Game'}`")
             
             # --- Hybrid Game Mode Input ---
             game_mode_select_options = ["Main"]
-            if not is_new_game_mode and selected_game_id:
+            if not is_new_installment_mode and selected_game_id:
                 game_mode_list = get_game_modes(selected_game_id)
                 if game_mode_list:
                     game_mode_select_options = list(set(game_mode_list))
@@ -302,7 +355,7 @@ if st.session_state.player_name and st.session_state.is_trusted_user:
             submitted = st.form_submit_button("Submit Stats")
             if submitted:
                 valid = False
-                if is_new_game_mode:
+                if is_new_installment_mode:
                     if final_game_name and final_game_genre != "Select a Genre" and final_game_subgenre != "Select a Subgenre" and stats_list: 
                         valid = True
                     else: st.warning("Fill New Game Name, Genre, Subgenre, & ≥1 Stat.")

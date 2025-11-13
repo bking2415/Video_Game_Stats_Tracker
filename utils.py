@@ -138,19 +138,6 @@ def get_all_players():
         response.raise_for_status(); players = response.json().get('players', []); st.session_state.data_cache[cache_key] = players; return players
     except requests.exceptions.RequestException as e: st.error(f"Error fetching players: {e}"); return []
 
-def get_player_games(player_id):
-    """Fetches games for a specific player (owned by user)."""
-    if not st.session_state.is_trusted_user or not player_id: return []
-    cache_key = f"player_games_{st.session_state.email}_{player_id}"
-    if cache_key in st.session_state.data_cache: return st.session_state.data_cache[cache_key]
-    auth_headers = get_auth_headers()
-    if not auth_headers: st.error("Auth token missing for games."); return []
-    try:
-        response = requests.get(f"{FLASK_API_URL}/get_player_games/{player_id}", headers=auth_headers)
-        if response.status_code == 401: st.error("Auth failed (games)."); st.session_state.jwt_token = None; st.session_state.auth_mode = 'guest'; st.rerun(); return []
-        response.raise_for_status(); games = response.json().get('games', []); st.session_state.data_cache[cache_key] = games; return games
-    except requests.exceptions.RequestException as e: st.error(f"Error fetching games for player {player_id}: {e}"); return []
-
 def get_all_games():
     """Fetches all games (id, name) the user has stats for."""
     if not st.session_state.is_trusted_user: return []
@@ -227,7 +214,42 @@ def get_game_stat_types(game_id):
     except requests.exceptions.RequestException as e: 
         st.error(f"Error fetching stat types for game {game_id}: {e}"); return []
 
+def get_game_franchises():
+    """Fetches all unique game franchises associated with the logged-in user."""
+    if not st.session_state.auth_mode == 'logged_in': return []
+    cache_key = f"game_franchises_{st.session_state.email}"
+    if cache_key in st.session_state.data_cache: return st.session_state.data_cache[cache_key]
+    
+    auth_headers = get_auth_headers()
+    if not auth_headers: st.error("Auth token missing for game franchises."); return []
+    try:
+        response = requests.get(f"{FLASK_API_URL}/get_game_franchises", headers=auth_headers)
+        if response.status_code == 401: st.error("Auth failed (game franchises)."); st.session_state.jwt_token = None; st.session_state.auth_mode = 'guest'; st.rerun(); return []
+        response.raise_for_status()
+        franchises = response.json().get('game_franchises', [])
+        st.session_state.data_cache[cache_key] = franchises
+        return franchises
+    except requests.exceptions.RequestException as e: 
+        st.error(f"Error fetching game franchises: {e}"); return []
 
+def get_game_installments(franchise_name):
+    """Fetches game installments (id, name) for a specific franchise, scoped to the user."""
+    if not st.session_state.auth_mode == 'logged_in': return []
+    # Don't cache this as it's dynamic based on selection
+    
+    auth_headers = get_auth_headers()
+    if not auth_headers: st.error("Auth token missing for game installments."); return []
+    try:
+        # URL encode the franchise name in case it has spaces or special chars
+        encoded_franchise_name = requests.utils.quote(franchise_name)
+        response = requests.get(f"{FLASK_API_URL}/get_game_installments/{encoded_franchise_name}", headers=auth_headers)
+        if response.status_code == 401: st.error("Auth failed (game installments)."); st.session_state.jwt_token = None; st.session_state.auth_mode = 'guest'; st.rerun(); return []
+        response.raise_for_status()
+        games = response.json().get('game_installments', [])
+        return games
+    except requests.exceptions.RequestException as e: 
+        st.error(f"Error fetching game installments for {franchise_name}: {e}"); return []
+        
 # --- Database Read Functions (Direct Connection - TRUSTED USERS ONLY) ---
 def get_db_conn_read_only():
     if not st.session_state.is_trusted_user:
