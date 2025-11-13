@@ -176,7 +176,7 @@ erDiagram
     dim_games {
         INT game_id PK
         VARCHAR game_name
-        VARCHAR game_series
+        VARCHAR game_installment
         VARCHAR game_genre
         VARCHAR game_subgenre
         TIMESTAMP created_at
